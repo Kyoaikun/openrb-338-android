@@ -1,0 +1,67 @@
+name: Build Android APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Android port
+        uses: actions/checkout@v4
+        with:
+          path: port
+      - name: Checkout original OpenRB-338
+        uses: actions/checkout@v4
+        with:
+          repository: pingw33n/openrb-338
+          path: upstream
+      - name: Apply Android port
+        shell: bash
+        run: |
+          cp -a port/android upstream/
+          mkdir -p upstream/crates/orb-android
+          cp -a port/crates/orb-android/. upstream/crates/orb-android/
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('upstream/Cargo.toml')
+          s=p.read_text()
+          if '"crates/orb-android"' not in s:
+              s=s.replace('"crates/orb-player"', '"crates/orb-player", "crates/orb-android"')
+          p.write_text(s)
+          PY
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Install Android SDK and NDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Compile original Rust audio engine
+        working-directory: upstream
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=aarch64-linux-android26-clang
+          cargo build --release --target aarch64-linux-android -p orb-android
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/liborb_android.so android/app/src/main/jniLibs/arm64-v8a/
+      - name: Build APK
+        working-directory: upstream/android
+        run: gradle assembleDebug
+      - name: Name APK
+        run: |
+          mkdir -p output
+          cp upstream/android/app/build/outputs/apk/debug/*.apk output/OpenRB-338-Android-arm64.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenRB-338-Android-arm64
+          path: output/OpenRB-338-Android-arm64.apk
